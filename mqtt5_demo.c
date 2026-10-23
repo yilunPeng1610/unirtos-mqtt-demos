@@ -20,12 +20,15 @@
 #include "qcm_mqtt.h"
 #include "qcm_mqtt_config.h"
 #include "qcm_proj_config.h"
+#if !(defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
 #include "qosa_urc.h"
-#include "unirtos_app_init_registry.h"
-
+#endif
 #ifdef CONFIG_QCM_VTLS_FUNC
 #include "qcm_vtls_cfg.h"
 #endif /* CONFIG_QCM_VTLS_FUNC */
+#if (defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
+#include "qosa_wlan.h"
+#endif
 
 #define QOS_LOG_TAG                LOG_TAG
 
@@ -70,8 +73,11 @@
 #define MQTT_DEMO_TEST_CONTENT     "Hello Welcome to test mqtt!" /*!< Test message content */
 
 #define MQTT_DEMO_TEST_MQTTS       1                             /*!< Test MQTT or MQTTS */
+#if !(defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
 #define MQTT_DEMO_TEST_URC_ENABLE  1                             /*!< Enable URC reporting for test results */
-
+#else
+#define MQTT_DEMO_TEST_URC_ENABLE  0
+#endif
 /**
  * @enum qcm_mqtt_client_event_e.
  * @brief Events reported by the MQTT client.
@@ -113,7 +119,66 @@ typedef struct
 
 // Client context
 static mqtt_demo_ctx_t *g_mqtt_ctx = QOSA_NULL;
+#if (defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
 
+static qosa_sem_t  wifi_sem = QOSA_NULL;
+
+static void qcm_socket_app_wifi_event_cb(void *param)
+{
+    qosa_wlan_event_msg_t  *event_info = (qosa_wlan_event_msg_t *)param;
+
+    switch(event_info->event)
+    {
+    case QOSA_WLAN_EVT_STA_CONNECTED:
+        {
+            QLOGI("wlan connected!\n");
+        }
+        break;
+    case QOSA_WLAN_EVT_STA_GOT_IP:
+        {
+            QLOGI("wlan got ip!\n");
+            QLOGI("wifi_sem=%p\n", wifi_sem);
+            if(wifi_sem != QOSA_NULL)
+                qosa_sem_release(wifi_sem);
+        }
+        break;
+    case QOSA_WLAN_EVT_STA_DISCONNECTED:
+        {
+            QLOGI("wlan disconnected!\n");            
+        }
+        break;
+    case QOSA_WLAN_EVT_STA_PASSWORD_WRONG:
+    case QOSA_WLAN_EVT_STA_NO_AP_FOUND:
+    case QOSA_WLAN_EVT_STA_CONNECT_FAILED:
+        {
+            QLOGI("wlan connect failed!\n");
+        }
+        break;
+    default:
+        break;
+    }
+}
+static int qcm_socket_app_wifi_active(void)
+{
+    qosa_wlan_network_t  wlan_cfg = {0};
+    qosa_wlan_sta_config_t sta_cfg = {0};
+    qosa_wlan_driver_init();
+
+    sta_cfg.dhcp_enabled = QOSA_TRUE;    
+    qosa_memcpy(sta_cfg.ssid, "cbq666", qosa_strlen("cbq666"));
+    qosa_memcpy(sta_cfg.pwd, "12345678", qosa_strlen("12345678"));
+    sta_cfg.ip.ipv4.addr_type = QOSA_WLAN_ADDR_TYPE_DHCP;
+
+    wlan_cfg.mode = QOSA_WLAN_MODE_STA;
+    wlan_cfg.sta_cfg = &sta_cfg;
+    
+    qosa_wlan_register_status_cb(qcm_socket_app_wifi_event_cb);
+
+    qosa_wlan_start(&wlan_cfg);
+    
+    return 0;
+}
+#endif
 /*===========================================================================
  *  Functions
  ===========================================================================*/
@@ -193,8 +258,10 @@ static int unir_mqtt_demo_ctx_init(qcm_mqtt_config_t *mqtt_option)
 #else
     mqtt_option->version = QCM_MQTT_VERSION_V3_1_1;
 #endif /* CONFIG_QCM_MQTT5_FUNC */
+#if !(defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
     mqtt_option->sim_id = MQTT_DEMO_SIMID;
     mqtt_option->pdp_cid = MQTT_DEMO_PDPID;
+#endif
     mqtt_option->kalive_time = MQTT_DEMO_KEEP_ALIVE;
     mqtt_option->delivery_time = MQTT_DEMO_DELIVERY_TIME;
     mqtt_option->delivery_cnt = MQTT_DEMO_DELIVERY_CNT;
@@ -818,8 +885,10 @@ static int unir_mqtt_demo_event_handle(mqtt_demo_msg_t *msg)
     // report urc
     if (resp_len != 0 && MQTT_DEMO_TEST_URC_ENABLE)
     {
+#if !(defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
         qcm_urc_send_report(QOSA_DEV_SIOLIB_UART1_PORT, resp_str, resp_len, QOSA_URC_OUT_METHOD_UNICAST, QOSA_RI_CATEG_OTHERS, QOSA_URC_SEND_DEFAULT);
         qcm_urc_flush_cache();
+#endif
     }
     if (resp_ptr->data != QOSA_NULL)
     {
@@ -889,6 +958,7 @@ static void unir_mqtt_demo_recv_new_message(mqtt_demo_msg_t *msg)
             payload_len = recv_pub.payload.data_len;
             // Construct and send URC header information
             qosa_snprintf(urc_buf, sizeof(urc_buf), "+QMTRECV: %d,%d,\"%s\",%d,\"", client_id, recv_pub.msg_id, recv_pub.topic.data_ptr, payload_len);
+#if !(defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
             qcm_urc_send_report(
                 QOSA_DEV_SIOLIB_UART1_PORT,
                 urc_buf,
@@ -910,6 +980,7 @@ static void unir_mqtt_demo_recv_new_message(mqtt_demo_msg_t *msg)
 
             // Flush URC cache to ensure data is sent
             qcm_urc_flush_cache();
+#endif
         }
 #ifdef CONFIG_QCM_MQTT5_FUNC
         //print MQTT publish properties
@@ -959,6 +1030,8 @@ static void unir_mqtt_demo_recv_cache_message(mqtt_demo_msg_t *msg)
             payload_len = recv_pub.payload.data_len;
             // Construct and send URC header information
             qosa_snprintf(urc_buf, sizeof(urc_buf), "+QMTRECV: %d,%d,\"%s\",%d,\"", client_id, recv_pub.msg_id, recv_pub.topic.data_ptr, payload_len);
+#if !(defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
+             
             qcm_urc_send_report(
                 QOSA_DEV_SIOLIB_UART1_PORT,
                 urc_buf,
@@ -980,6 +1053,7 @@ static void unir_mqtt_demo_recv_cache_message(mqtt_demo_msg_t *msg)
 
             // Flush URC cache to ensure data is sent
             qcm_urc_flush_cache();
+#endif
         }
 #ifdef CONFIG_QCM_MQTT5_FUNC
         //print MQTT publish properties
@@ -1012,6 +1086,19 @@ static void unir_mqtt_demo_task(void *argv)
 
     // Wait for system initialization to complete and facilitate log debugging
     qosa_task_sleep_sec(10);
+#if (defined(CONFIG_QOSA_BK7238_PLATFORM_FUNC) ||defined(CONFIG_QOSA_BK7258_PLATFORM_FUNC) || defined(CONFIG_QOSA_ECR6600_PLATFORM_FUNC)) 
+    
+    qosa_sem_create(&wifi_sem, 0);
+    QOSA_ASSERT(wifi_sem != QOSA_NULL);
+    QLOGI("wifi_sem=%p\n", wifi_sem);
+    if(qcm_socket_app_wifi_active() != 0)
+    {
+        QLOGE("wlan error");
+        return;
+    }
+    qosa_sem_wait(wifi_sem, QOSA_WAIT_FOREVER);
+    QLOGI("wlan actived!\n");
+#endif
     ret = unir_mqtt_demo_open();
     if (ret != 0)
     {
